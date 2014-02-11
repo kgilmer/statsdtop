@@ -184,7 +184,7 @@ func top() {
 			Clear().
 			Move(1,0).
 			Color("y").
-			Print(fmt.Sprintf("%v", time.Now().Unix())).
+			Print(fmt.Sprintf("%v", time.Now().Local())).
 			Move(2,0).
 			Color("r").
 			Print("Counters").
