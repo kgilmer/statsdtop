@@ -5,6 +5,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/wsxiaoys/terminal"
+	// "github.com/wsxiaoys/terminal/color"
 	"log"
 	"math"
 	"net"
@@ -113,6 +115,7 @@ func monitor() {
 					counters[s.Bucket] = 0
 				}
 				counters[s.Bucket] += int64(float64(s.Value.(int64)) * float64(1/s.Sampling))
+				fmt.Printf("counter: %s %d %d\n", s.Bucket, counters[s.Bucket], time.Now().Unix())
 			}
 		}
 	}
@@ -333,8 +336,35 @@ func udpListener() {
 		}
 
 		for _, p := range parseMessage(message[:n]) {
+			log.Printf("recevied message")
 			In <- p
 		}
+	}
+}
+
+func top() {
+	for {
+		terminal.Stdout.
+			Clear().
+			Move(0,0).
+			Color("r").
+			Print("Counters").
+			Right(4).
+			Color("b")
+		
+		var x = 4
+		var y = 2
+		
+		for s, c := range counters {
+			terminal.Stdout.
+				Move(y, x).
+				Print(fmt.Sprintf("%s: %d", s, c))
+				
+			y = y + 1
+		}
+		
+	
+		time.Sleep(time.Second)
 	}
 }
 
@@ -351,5 +381,6 @@ func main() {
 	*persistCountKeys = -1 * (*persistCountKeys)
 
 	go udpListener()
+	go top()
 	monitor()
 }
