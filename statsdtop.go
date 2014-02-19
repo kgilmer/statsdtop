@@ -16,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"sort"
 )
 
 const (
@@ -182,27 +183,58 @@ func top() {
 	for {
 		terminal.Stdout.
 			Clear().
-			Move(1,0).
+			Move(1, 0).
 			Color("y").
-			Print(fmt.Sprintf("%v", time.Now().Local())).
-			Move(2,0).
+			Print(fmt.Sprintf("%v", time.Now().Local()))
+
+		var x = 4
+		var y = 3
+
+		terminal.Stdout.
+			Move(y, x).
 			Color("r").
 			Print("Counters").
 			Right(4).
 			Color("b")
-		
-		var x = 4
-		var y = 3
-		
+
+		y++
+
 		for s, c := range counters {
 			terminal.Stdout.
 				Move(y, x).
 				Print(fmt.Sprintf("%s: %d", s, c))
-				
+
 			y = y + 1
 		}
-		
-	
+
+		x = x + 30
+		y = 3
+
+		guageIndex := make([]string, len(gauges))
+		i := 0
+		for k, _ := range gauges {
+			guageIndex[i] = k
+			i++
+		}
+		sort.Strings(guageIndex)
+
+		terminal.Stdout.
+			Move(y, x).
+			Color("r").
+			Print("Gauges").
+			Right(4).
+			Color("b")
+
+		y++
+
+		for _, c := range guageIndex {
+			terminal.Stdout.
+				Move(y, x).
+				Print(fmt.Sprintf("%s: %d", c, gauges[c]))
+
+			y = y + 1
+		}
+
 		time.Sleep(time.Second)
 	}
 }
