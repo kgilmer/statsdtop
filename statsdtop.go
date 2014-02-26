@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	"github.com/wsxiaoys/terminal"
+	"github.com/jroimartin/gocui"
 	// "github.com/wsxiaoys/terminal/color"
 	"log"
 	"net"
@@ -12,11 +12,11 @@ import (
 	"os/signal"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
-	"sort"
 )
 
 const (
@@ -179,64 +179,105 @@ func udpListener() {
 	}
 }
 
-func top() {
-	for {
-		terminal.Stdout.
-			Clear().
-			Move(1, 0).
-			Color("y").
-			Print(fmt.Sprintf("%v", time.Now().Local()))
+func layout(g *gocui.Gui) error {
+	maxX, maxY := g.Size()
+	columnX := maxX/3 - 1
 
-		var x = 4
-		var y = 3
-
-		terminal.Stdout.
-			Move(y, x).
-			Color("r").
-			Print("Counters").
-			Right(4).
-			Color("b")
-
-		y++
-
-		for s, c := range counters {
-			terminal.Stdout.
-				Move(y, x).
-				Print(fmt.Sprintf("%s: %d", s, c))
-
-			y = y + 1
+	if _, err := g.SetView("status", -1, -1, maxX, 1); err != nil {
+		if err != gocui.ErrorUnkView {
+			return err
 		}
-
-		x = x + 30
-		y = 3
-
-		guageIndex := make([]string, len(gauges))
-		i := 0
-		for k, _ := range gauges {
-			guageIndex[i] = k
-			i++
-		}
-		sort.Strings(guageIndex)
-
-		terminal.Stdout.
-			Move(y, x).
-			Color("r").
-			Print("Gauges").
-			Right(4).
-			Color("b")
-
-		y++
-
-		for _, c := range guageIndex {
-			terminal.Stdout.
-				Move(y, x).
-				Print(fmt.Sprintf("%s: %d", c, gauges[c]))
-
-			y = y + 1
-		}
-
-		time.Sleep(time.Second)
 	}
+
+	if _, err := g.SetView("counters", 0, 2, columnX, maxY); err != nil {
+		if err != gocui.ErrorUnkView {
+			return err
+		}
+	}
+
+	if _, err := g.SetView("gauges", columnX+1, 2, columnX*2, maxY); err != nil {
+		if err != gocui.ErrorUnkView {
+			return err
+		}
+	}
+
+	if _, err := g.SetView("timers", (columnX*2)+1, 2, maxX-1, maxY); err != nil {
+		if err != gocui.ErrorUnkView {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func updateViews(g *gocui.Gui) {
+	for {
+		time.Sleep(1000 * time.Millisecond)
+
+		if sv := g.View("status"); sv != nil {
+			sv.Clear()
+			fmt.Fprintln(sv, time.Now().Local())
+		}
+
+		if sv := g.View("counters"); sv != nil {
+			sv.Clear()
+			fmt.Fprintln(sv, "Counters")
+
+			indexedSlice := make([]string, len(counters))
+			i := 0
+			for k, _ := range counters {
+				indexedSlice[i] = k
+				i++
+			}
+			sort.Strings(indexedSlice)
+
+			for _, value := range indexedSlice {
+				fmt.Fprintf(sv, "%s =\t%d\n", value, counters[value])
+			}
+		}
+
+		if sv := g.View("gauges"); sv != nil {
+			sv.Clear()
+			fmt.Fprintln(sv, "Gauges")
+
+			indexedSlice := make([]string, len(gauges))
+			i := 0
+			for k, _ := range gauges {
+				indexedSlice[i] = k
+				i++
+			}
+			sort.Strings(indexedSlice)
+
+			for _, value := range indexedSlice {
+				fmt.Fprintf(sv, "%s =\t%d\n", value, gauges[value])
+			}
+		}
+
+		if sv := g.View("timers"); sv != nil {
+			sv.Clear()
+			fmt.Fprintln(sv, "Timers")
+
+			indexedSlice := make([]string, len(timers))
+			i := 0
+			for k, _ := range timers {
+				indexedSlice[i] = k
+				i++
+			}
+			sort.Strings(indexedSlice)
+
+			for _, value := range indexedSlice {
+				fmt.Fprintf(sv, "%s =\t%v\n", value, timers[value])
+			}
+		}
+
+		if err := g.Flush(); err != nil {
+			return
+		}
+	}
+}
+
+func quit(g *gocui.Gui, v *gocui.View) error {
+	return gocui.ErrorQuit
 }
 
 func main() {
@@ -252,6 +293,23 @@ func main() {
 	*persistCountKeys = -1 * (*persistCountKeys)
 
 	go udpListener()
-	go top()
-	monitor()
+
+	g := gocui.NewGui()
+	if err := g.Init(); err != nil {
+		log.Panicln(err)
+	}
+	defer g.Close()
+
+	g.SetLayout(layout)
+	if err := g.SetKeybinding("", gocui.KeyCtrlC, 0, quit); err != nil {
+		log.Panicln(err)
+	}
+
+	go updateViews(g)
+	go monitor()
+
+	err := g.MainLoop()
+	if err != nil && err != gocui.ErrorQuit {
+		log.Panicln(err)
+	}
 }
