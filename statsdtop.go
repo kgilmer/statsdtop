@@ -36,14 +36,15 @@ type Packet struct {
 
 type Uint64Slice []uint64
 
-func (s Uint64Slice) Len() int           { return len(s) }
-func (s Uint64Slice) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
-func (s Uint64Slice) Less(i, j int) bool { return s[i] < s[j] }
-
 type Percentiles []*Percentile
 type Percentile struct {
 	float float64
 	str   string
+}
+
+type Counter struct {
+	value int64
+	received time.Time
 }
 
 func (a *Percentiles) Set(s string) error {
@@ -76,7 +77,7 @@ func init() {
 
 var (
 	In       = make(chan *Packet, MAX_UNPROCESSED_PACKETS)
-	counters = make(map[string]int64)
+	counters = make(map[string]Counter)
 	gauges   = make(map[string]uint64)
 	timers   = make(map[string]Uint64Slice)
 )
@@ -99,10 +100,11 @@ func monitor() {
 				gauges[s.Bucket] = s.Value.(uint64)
 			} else {
 				v, ok := counters[s.Bucket]
-				if !ok || v < 0 {
-					counters[s.Bucket] = 0
+				if !ok || v.value < 0 {
+					counters[s.Bucket] = Counter{0, time.Now()}
 				}
-				counters[s.Bucket] += int64(float64(s.Value.(int64)) * float64(1/s.Sampling))
+				val := counters[s.Bucket].value + int64(float64(s.Value.(int64)) * float64(1/s.Sampling))
+				counters[s.Bucket] = Counter{val, time.Now()}
 			}
 		}
 	}
@@ -181,27 +183,57 @@ func udpListener() {
 
 func layout(g *gocui.Gui) error {
 	maxX, maxY := g.Size()
-	columnX := maxX/3 - 1
+	columnX := maxX/3 
 
-	if _, err := g.SetView("status", -1, -1, maxX, 1); err != nil {
+	g.BgColor = gocui.ColorWhite
+	g.FgColor = gocui.ColorBlack
+	g.RenderFrames = false
+
+	if v, err := g.SetView("status", -1, -1, maxX, 1); err != nil {
+		if err != gocui.ErrorUnkView {
+			return err
+		}
+		v.FgColor = gocui.ColorWhite
+		v.BgColor = gocui.ColorBlack
+	}
+
+	if v, err := g.SetView("counterHeader", -1, 0, columnX, maxY); err != nil {
+		if err != gocui.ErrorUnkView {
+			return err
+		}
+		v.FgColor = gocui.ColorWhite
+		v.BgColor = gocui.ColorBlue
+		fmt.Fprintf(v, "Counters")
+	}
+	if _, err := g.SetView("counters", -1, 1, columnX, maxY); err != nil {
 		if err != gocui.ErrorUnkView {
 			return err
 		}
 	}
 
-	if _, err := g.SetView("counters", 0, 2, columnX, maxY); err != nil {
+	if v, err := g.SetView("gaugeHeader", columnX, 0, columnX*2, maxY); err != nil {
+		if err != gocui.ErrorUnkView {
+			return err
+		}
+		v.FgColor = gocui.ColorWhite
+		v.BgColor = gocui.ColorCyan
+		fmt.Fprintf(v, "Gauges")
+	}
+	if _, err := g.SetView("gauges", columnX, 1, columnX*2, maxY); err != nil {
 		if err != gocui.ErrorUnkView {
 			return err
 		}
 	}
 
-	if _, err := g.SetView("gauges", columnX+1, 2, columnX*2, maxY); err != nil {
+	if v, err := g.SetView("timerHeader", columnX*2, 0, maxX-1, maxY); err != nil {
 		if err != gocui.ErrorUnkView {
 			return err
 		}
+		v.FgColor = gocui.ColorWhite
+		v.BgColor = gocui.ColorMagenta
+		fmt.Fprintf(v, "Timers")
 	}
-
-	if _, err := g.SetView("timers", (columnX*2)+1, 2, maxX-1, maxY); err != nil {
+	if _, err := g.SetView("timers", (columnX*2), 1, maxX-1, maxY); err != nil {
 		if err != gocui.ErrorUnkView {
 			return err
 		}
@@ -221,8 +253,7 @@ func updateViews(g *gocui.Gui) {
 
 		if sv := g.View("counters"); sv != nil {
 			sv.Clear()
-			fmt.Fprintln(sv, "Counters")
-
+			
 			indexedSlice := make([]string, len(counters))
 			i := 0
 			for k, _ := range counters {
@@ -230,15 +261,18 @@ func updateViews(g *gocui.Gui) {
 				i++
 			}
 			sort.Strings(indexedSlice)
-
+			
 			for _, value := range indexedSlice {
-				fmt.Fprintf(sv, "%s =\t%d\n", value, counters[value])
+				fmt.Fprintf(sv, "%s =\t%d\n", value, counters[value].value)
+				var duration time.Duration = time.Now().Sub(counters[value].received)
+				if duration.Seconds() > float64(*flushInterval) {
+					delete(counters, value)
+				}
 			}
 		}
 
 		if sv := g.View("gauges"); sv != nil {
 			sv.Clear()
-			fmt.Fprintln(sv, "Gauges")
 
 			indexedSlice := make([]string, len(gauges))
 			i := 0
@@ -255,7 +289,6 @@ func updateViews(g *gocui.Gui) {
 
 		if sv := g.View("timers"); sv != nil {
 			sv.Clear()
-			fmt.Fprintln(sv, "Timers")
 
 			indexedSlice := make([]string, len(timers))
 			i := 0
@@ -266,7 +299,7 @@ func updateViews(g *gocui.Gui) {
 			sort.Strings(indexedSlice)
 
 			for _, value := range indexedSlice {
-				fmt.Fprintf(sv, "%s =\t%v\n", value, timers[value])
+				calculateAverageTime(sv, value, timers[value]);
 			}
 		}
 
@@ -274,6 +307,28 @@ func updateViews(g *gocui.Gui) {
 			return
 		}
 	}
+}
+
+func calculateAverageTime(sv *gocui.View, label string, timeSegments Uint64Slice) {
+	var total uint64
+	var sum uint64
+	
+	for index, value := range timeSegments {
+		if index < len(timeSegments) - 1 {
+			sum = sum + (timeSegments[index + 1] - value)
+			total = total + 1
+		}
+	}
+
+	var avg = float64(0)
+	
+	if total == 0 {
+		avg = 0
+	} else {
+		avg = float64(sum) / float64(total)
+	}
+
+	fmt.Fprintf(sv, "%s =\t%v\n", label, avg)
 }
 
 func quit(g *gocui.Gui, v *gocui.View) error {
